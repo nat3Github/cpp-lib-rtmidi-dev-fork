@@ -5,12 +5,15 @@ pub const MidiApi = enum {
     jack,
     core,
     winmm,
+    amidi,
     dummy,
 
     pub const defaults = struct {
         pub const macos: []const MidiApi = &.{.core};
         pub const linux: []const MidiApi = &.{ .alsa, .jack };
         pub const windows: []const MidiApi = &.{.winmm};
+        pub const ios: []const MidiApi = &.{.core};
+        pub const android: []const MidiApi = &.{.amidi};
     };
 };
 
@@ -57,7 +60,8 @@ pub fn build(b: *std.Build) !void {
         const maybe_opts = b.option([]const MidiApi, "midi-api", "Enable specific MIDI APIs");
         break :blk if (maybe_opts) |opts| opts else switch (t.os.tag) {
             .macos => MidiApi.defaults.macos,
-            .linux => MidiApi.defaults.linux,
+            .ios => MidiApi.defaults.ios,
+            .linux => if (t.abi.isAndroid()) MidiApi.defaults.android else MidiApi.defaults.linux,
             .windows => MidiApi.defaults.windows,
             else => unsupportedOs(t.os.tag),
         };
@@ -81,7 +85,33 @@ pub fn build(b: *std.Build) !void {
                 }
             }
         },
-        .linux => {
+        .ios => {
+            for (midi_apis) |api| {
+                switch (api) {
+                    .core => {
+                        try flags.append(b.allocator, "-D__MACOSX_CORE__");
+                        lib_mod.linkFramework("CoreMIDI", .{});
+                        lib_mod.linkFramework("CoreFoundation", .{});
+                    },
+                    .dummy => try flags.append(b.allocator, "-D__RTMIDI_DUMMY__"),
+                    else => unsupportedMidiApi(t.os.tag, api),
+                }
+            }
+        },
+        .linux => if (t.abi.isAndroid()) {
+            for (midi_apis) |api| {
+                switch (api) {
+                    .amidi => {
+                        try flags.append(b.allocator, "-D__AMIDI__");
+                        lib_mod.linkSystemLibrary("amidi", .{ .use_pkg_config = .no });
+                        lib_mod.linkSystemLibrary("log", .{ .use_pkg_config = .no });
+                        lib_mod.linkSystemLibrary("nativehelper", .{ .use_pkg_config = .no });
+                    },
+                    .dummy => try flags.append(b.allocator, "-D__RTMIDI_DUMMY__"),
+                    else => unsupportedMidiApi(t.os.tag, api),
+                }
+            }
+        } else {
             for (midi_apis) |api| {
                 switch (api) {
                     .alsa => {
