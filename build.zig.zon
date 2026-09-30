@@ -1,0 +1,17 @@
+.{
+    .name = .rtmidi,
+    .version = "6.0.0",
+    .minimum_zig_version = "0.16.0",
+    .fingerprint = 0x40cfe348b55287ed,
+    .dependencies = .{},
+    .paths = .{
+        "LICENSE",
+        "build.zig",
+        "build.zig.zon",
+        "rtmidi.zig",
+        "RtMidi.cpp",
+        "RtMidi.h",
+        "rtmidi_c.cpp",
+        "rtmidi_c.h",
+    },
+}
