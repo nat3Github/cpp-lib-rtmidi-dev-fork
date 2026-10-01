@@ -13,5 +13,7 @@
         "RtMidi.h",
         "rtmidi_c.cpp",
         "rtmidi_c.h",
+        "rtmidi_android_usb.c",
+        "rtmidi_android_usb.h",
     },
 }
