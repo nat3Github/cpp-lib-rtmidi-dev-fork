@@ -232,7 +232,7 @@ pub const MidiIn = struct {
         const actual_len = c.rtmidi_get_port_name(self.ptr, port_number, buf.ptr, &len);
         if (actual_len < 0) return error.RtMidiError;
 
-        return buf[0..@intCast(actual_len)];
+        return allocator.realloc(buf, @intCast(actual_len));
     }
 
     pub fn setCallback(self: *MidiIn, callback: c.RtMidiCCallback, user_data: ?*anyopaque) !void {
@@ -303,7 +303,7 @@ pub const MidiOut = struct {
         const actual_len = c.rtmidi_get_port_name(self.ptr, port_number, buf.ptr, &len);
         if (actual_len < 0) return error.RtMidiError;
 
-        return buf[0..@intCast(actual_len)];
+        return allocator.realloc(buf, @intCast(actual_len));
     }
 
     pub fn sendMessage(self: *MidiOut, message: []const u8) !void {
