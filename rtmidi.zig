@@ -162,9 +162,9 @@ pub const MidiIn = struct {
     pub const Config = struct {
         queue_size_limit: u32 = 1024,
         api: MidiApi = switch (builtin.os.tag) {
-            .windows => MidiApi.windows_uwp,
-            .macos => MidiApi.macosx_core,
-            .linux => if (builtin.abi.isAndroid()) MidiApi.unspecified else MidiApi.linux_alsa,
+            .windows => MidiApi.windows_mm,
+            .macos, .ios => MidiApi.macosx_core,
+            .linux => if (builtin.abi.isAndroid()) MidiApi.android_usb else MidiApi.linux_alsa,
             .wasi => MidiApi.web_midi_api,
             else => MidiApi.unspecified,
         },
