@@ -424,6 +424,53 @@ class MidiOutAndroid: public MidiOutApi
 
 #endif
 
+#if defined(__ANDROID_USB_MIDI__)
+
+#include "rtmidi_android_usb.h"
+
+class MidiInAndroidUsb : public MidiInApi
+{
+ public:
+  MidiInAndroidUsb( const std::string &clientName, unsigned int queueSizeLimit );
+  ~MidiInAndroidUsb( void );
+  RtMidi::Api getCurrentApi( void ) { return RtMidi::ANDROID_USB; };
+  void openPort( unsigned int portNumber, const std::string &portName );
+  void openVirtualPort( const std::string &portName );
+  void closePort( void );
+  void setClientName( const std::string &clientName );
+  void setPortName( const std::string &portName );
+  unsigned int getPortCount( void );
+  std::string getPortName( unsigned int portNumber );
+
+ protected:
+  void initialize( const std::string& clientName );
+  static void onMessage( double timeStamp, const unsigned char *message, size_t size, void *userData );
+  RtMidiAndroidUsbPort *port_;
+  double lastTime_;
+};
+
+class MidiOutAndroidUsb : public MidiOutApi
+{
+ public:
+  MidiOutAndroidUsb( const std::string &clientName );
+  ~MidiOutAndroidUsb( void );
+  RtMidi::Api getCurrentApi( void ) { return RtMidi::ANDROID_USB; };
+  void openPort( unsigned int portNumber, const std::string &portName );
+  void openVirtualPort( const std::string &portName );
+  void closePort( void );
+  void setClientName( const std::string &clientName );
+  void setPortName( const std::string &portName );
+  unsigned int getPortCount( void );
+  std::string getPortName( unsigned int portNumber );
+  void sendMessage( const unsigned char *message, size_t size );
+
+ protected:
+  void initialize( const std::string& clientName );
+  RtMidiAndroidUsbPort *port_;
+};
+
+#endif
+
 #if defined(__RTMIDI_DUMMY__)
 
 class MidiInDummy: public MidiInApi
@@ -501,6 +548,7 @@ const char* rtmidi_api_names[][2] = {
   { "web"         , "Web MIDI API" },
   { "winuwp"      , "Windows UWP" },
   { "amidi"       , "Android MIDI API" },
+  { "androidusb"  , "Android USB MIDI" },
 };
 const unsigned int rtmidi_num_api_names =
   sizeof(rtmidi_api_names)/sizeof(rtmidi_api_names[0]);
@@ -528,6 +576,9 @@ extern "C" const RtMidi::Api rtmidi_compiled_apis[] = {
 #endif
 #if defined(__WEB_MIDI_API__)
   RtMidi::WEB_MIDI_API,
+#endif
+#if defined(__ANDROID_USB_MIDI__)
+  RtMidi::ANDROID_USB,
 #endif
 #if defined(__AMIDI__)
   RtMidi::ANDROID_AMIDI,
@@ -626,6 +677,10 @@ void RtMidiIn :: openMidiApi( RtMidi::Api api, const std::string &clientName, un
     if ( api == ANDROID_AMIDI )
     rtapi_ = new MidiInAndroid( clientName, queueSizeLimit );
 #endif
+#if defined(__ANDROID_USB_MIDI__)
+  if ( api == ANDROID_USB )
+    rtapi_ = new MidiInAndroidUsb( clientName, queueSizeLimit );
+#endif
 #if defined(__RTMIDI_DUMMY__)
   if ( api == RTMIDI_DUMMY )
     rtapi_ = new MidiInDummy( clientName, queueSizeLimit );
@@ -705,6 +760,10 @@ void RtMidiOut :: openMidiApi( RtMidi::Api api, const std::string &clientName )
 #if defined(__AMIDI__)
     if ( api == ANDROID_AMIDI )
     rtapi_ = new MidiOutAndroid( clientName );
+#endif
+#if defined(__ANDROID_USB_MIDI__)
+  if ( api == ANDROID_USB )
+    rtapi_ = new MidiOutAndroidUsb( clientName );
 #endif
 #if defined(__RTMIDI_DUMMY__)
   if ( api == RTMIDI_DUMMY )
@@ -5930,6 +5989,182 @@ void MidiOutAndroid :: sendMessage( const unsigned char *message, size_t size ) 
 }
 
 #endif  // __AMIDI__
+
+#if defined(__ANDROID_USB_MIDI__)
+
+static std::string androidUsbPortName( int input, unsigned int portNumber )
+{
+  char name[256];
+  if ( rtmidi_android_usb_port_name( input, portNumber, name, sizeof(name) ) != 0 ) return "";
+  return name;
+}
+
+MidiInAndroidUsb :: MidiInAndroidUsb( const std::string &clientName, unsigned int queueSizeLimit )
+  : MidiInApi( queueSizeLimit ), port_( NULL ), lastTime_( 0.0 )
+{
+  MidiInAndroidUsb::initialize( clientName );
+}
+
+MidiInAndroidUsb :: ~MidiInAndroidUsb( void )
+{
+  MidiInAndroidUsb::closePort();
+}
+
+void MidiInAndroidUsb :: initialize( const std::string& /*clientName*/ )
+{
+}
+
+void MidiInAndroidUsb :: onMessage( double timeStamp, const unsigned char *message, size_t size, void *userData )
+{
+  MidiInAndroidUsb *self = static_cast<MidiInAndroidUsb *>( userData );
+  MidiInApi::RtMidiInData &data = self->inputData_;
+  unsigned char status = message[0];
+  if ( status == 0xF0 && ( data.ignoreFlags & 0x01 ) ) return;
+  if ( ( status == 0xF1 || status == 0xF8 ) && ( data.ignoreFlags & 0x02 ) ) return;
+  if ( status == 0xFE && ( data.ignoreFlags & 0x04 ) ) return;
+
+  MidiInApi::MidiMessage msg;
+  msg.bytes.assign( message, message + size );
+  if ( data.firstMessage ) {
+    msg.timeStamp = 0.0;
+    data.firstMessage = false;
+  }
+  else {
+    msg.timeStamp = timeStamp - self->lastTime_;
+  }
+  self->lastTime_ = timeStamp;
+
+  if ( data.usingCallback ) {
+    RtMidiIn::RtMidiCallback callback = (RtMidiIn::RtMidiCallback) data.userCallback;
+    callback( msg.timeStamp, &msg.bytes, data.userData );
+  }
+  else if ( !data.queue.push( msg ) ) {
+    std::cerr << "\nMidiInAndroidUsb: message queue limit reached!!\n\n";
+  }
+}
+
+void MidiInAndroidUsb :: openPort( unsigned int portNumber, const std::string &/*portName*/ )
+{
+  if ( connected_ ) {
+    errorString_ = "MidiInAndroidUsb::openPort: a valid connection already exists!";
+    error( RtMidiError::WARNING, errorString_ );
+    return;
+  }
+  port_ = rtmidi_android_usb_open( 1, portNumber, &MidiInAndroidUsb::onMessage, this );
+  if ( !port_ ) {
+    errorString_ = "MidiInAndroidUsb::openPort: error opening USB MIDI device";
+    error( RtMidiError::DRIVER_ERROR, errorString_ );
+    return;
+  }
+  inputData_.firstMessage = true;
+  connected_ = true;
+}
+
+void MidiInAndroidUsb :: openVirtualPort( const std::string &/*portName*/ )
+{
+  errorString_ = "MidiInAndroidUsb::openVirtualPort: this function is not implemented for the Android USB API!";
+  error( RtMidiError::WARNING, errorString_ );
+}
+
+void MidiInAndroidUsb :: closePort( void )
+{
+  if ( !port_ ) return;
+  rtmidi_android_usb_close( port_ );
+  port_ = NULL;
+  connected_ = false;
+}
+
+void MidiInAndroidUsb :: setClientName( const std::string &/*clientName*/ )
+{
+}
+
+void MidiInAndroidUsb :: setPortName( const std::string &/*portName*/ )
+{
+}
+
+unsigned int MidiInAndroidUsb :: getPortCount( void )
+{
+  return rtmidi_android_usb_port_count( 1 );
+}
+
+std::string MidiInAndroidUsb :: getPortName( unsigned int portNumber )
+{
+  return androidUsbPortName( 1, portNumber );
+}
+
+MidiOutAndroidUsb :: MidiOutAndroidUsb( const std::string &clientName )
+  : MidiOutApi(), port_( NULL )
+{
+  MidiOutAndroidUsb::initialize( clientName );
+}
+
+MidiOutAndroidUsb :: ~MidiOutAndroidUsb( void )
+{
+  MidiOutAndroidUsb::closePort();
+}
+
+void MidiOutAndroidUsb :: initialize( const std::string& /*clientName*/ )
+{
+}
+
+void MidiOutAndroidUsb :: openPort( unsigned int portNumber, const std::string &/*portName*/ )
+{
+  if ( connected_ ) {
+    errorString_ = "MidiOutAndroidUsb::openPort: a valid connection already exists!";
+    error( RtMidiError::WARNING, errorString_ );
+    return;
+  }
+  port_ = rtmidi_android_usb_open( 0, portNumber, NULL, NULL );
+  if ( !port_ ) {
+    errorString_ = "MidiOutAndroidUsb::openPort: error opening USB MIDI device";
+    error( RtMidiError::DRIVER_ERROR, errorString_ );
+    return;
+  }
+  connected_ = true;
+}
+
+void MidiOutAndroidUsb :: openVirtualPort( const std::string &/*portName*/ )
+{
+  errorString_ = "MidiOutAndroidUsb::openVirtualPort: this function is not implemented for the Android USB API!";
+  error( RtMidiError::WARNING, errorString_ );
+}
+
+void MidiOutAndroidUsb :: closePort( void )
+{
+  if ( !port_ ) return;
+  rtmidi_android_usb_close( port_ );
+  port_ = NULL;
+  connected_ = false;
+}
+
+void MidiOutAndroidUsb :: setClientName( const std::string &/*clientName*/ )
+{
+}
+
+void MidiOutAndroidUsb :: setPortName( const std::string &/*portName*/ )
+{
+}
+
+unsigned int MidiOutAndroidUsb :: getPortCount( void )
+{
+  return rtmidi_android_usb_port_count( 0 );
+}
+
+std::string MidiOutAndroidUsb :: getPortName( unsigned int portNumber )
+{
+  return androidUsbPortName( 0, portNumber );
+}
+
+void MidiOutAndroidUsb :: sendMessage( const unsigned char *message, size_t size )
+{
+  if ( !port_ || size == 0 ) return;
+  if ( rtmidi_android_usb_send( port_, message, size ) != 0 ) {
+    errorString_ = "MidiOutAndroidUsb::sendMessage: USB transfer failed";
+    error( RtMidiError::WARNING, errorString_ );
+  }
+}
+
+#endif  // __ANDROID_USB_MIDI__
 
 // Optional backend features use non-virtual dispatch to preserve the existing
 // MidiApi and derived-class vtables. Other backends default to unsupported.

@@ -25,6 +25,7 @@ pub const c = struct {
     pub const RTMIDI_API_WEB_MIDI_API: c_int = 6;
     pub const RTMIDI_API_WINDOWS_UWP: c_int = 7;
     pub const RTMIDI_API_ANDROID: c_int = 8;
+    pub const RTMIDI_API_ANDROID_USB: c_int = 9;
 
     pub const enum_RtMidiApi = c_uint;
     pub const RTMIDI_ERROR_WARNING: c_int = 0;
@@ -77,6 +78,7 @@ pub const MidiApi = enum(c.enum_RtMidiApi) {
     web_midi_api = c.RTMIDI_API_WEB_MIDI_API,
     windows_uwp = c.RTMIDI_API_WINDOWS_UWP,
     android = c.RTMIDI_API_ANDROID,
+    android_usb = c.RTMIDI_API_ANDROID_USB,
 };
 
 pub const ErrorType = enum(c.enum_RtMidiErrorType) {
@@ -148,13 +150,21 @@ pub const MidiMessage = packed union {
     },
 };
 
+pub const android = struct {
+    extern fn rtmidi_android_usb_set_java_context(vm: *anyopaque, context: ?*anyopaque) void;
+    pub fn setJavaContext(vm: *anyopaque, context: ?*anyopaque) void {
+        if (comptime !builtin.abi.isAndroid()) return;
+        rtmidi_android_usb_set_java_context(vm, context);
+    }
+};
+
 pub const MidiIn = struct {
     pub const Config = struct {
         queue_size_limit: u32 = 1024,
         api: MidiApi = switch (builtin.os.tag) {
             .windows => MidiApi.windows_uwp,
             .macos => MidiApi.macosx_core,
-            .linux => MidiApi.linux_alsa,
+            .linux => if (builtin.abi.isAndroid()) MidiApi.unspecified else MidiApi.linux_alsa,
             .wasi => MidiApi.web_midi_api,
             else => MidiApi.unspecified,
         },

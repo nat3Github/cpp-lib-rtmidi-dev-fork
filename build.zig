@@ -6,6 +6,7 @@ pub const MidiApi = enum {
     core,
     winmm,
     amidi,
+    android_usb,
     dummy,
 
     pub const defaults = struct {
@@ -13,7 +14,7 @@ pub const MidiApi = enum {
         pub const linux: []const MidiApi = &.{ .alsa, .jack };
         pub const windows: []const MidiApi = &.{.winmm};
         pub const ios: []const MidiApi = &.{.core};
-        pub const android: []const MidiApi = &.{.amidi};
+        pub const android: []const MidiApi = &.{.android_usb};
     };
 };
 
@@ -40,6 +41,7 @@ pub fn build(b: *std.Build) !void {
         .link_libc = true,
         .link_libcpp = true,
     });
+    if (target.result.abi.isAndroid()) lib_mod.pic = true;
     const lib = b.addLibrary(.{
         .name = "rtmidi",
         .root_module = lib_mod,
@@ -101,6 +103,10 @@ pub fn build(b: *std.Build) !void {
         .linux => if (t.abi.isAndroid()) {
             for (midi_apis) |api| {
                 switch (api) {
+                    .android_usb => {
+                        try flags.append(b.allocator, "-D__ANDROID_USB_MIDI__");
+                        lib_mod.addCSourceFiles(.{ .root = rtmidi_cpp_root, .files = &.{"rtmidi_android_usb.c"} });
+                    },
                     .amidi => {
                         try flags.append(b.allocator, "-D__AMIDI__");
                         lib_mod.linkSystemLibrary("amidi", .{ .use_pkg_config = .no });
