@@ -6510,6 +6510,19 @@ void MidiOutAndroidUsb :: sendMessage( const unsigned char *message, size_t size
   }
 }
 
+static int androidUsbHotplugStart( RtMidiHotplug *hotplug )
+{
+  RtMidiAndroidUsbHotplug *usb = rtmidi_android_usb_hotplug_create( hotplug->callback, hotplug->userData );
+  if ( !usb ) return -1;
+  hotplug->apiData[RtMidi::ANDROID_USB] = usb;
+  return 0;
+}
+
+static void androidUsbHotplugStop( void *apiData )
+{
+  rtmidi_android_usb_hotplug_destroy( static_cast<RtMidiAndroidUsbHotplug *> (apiData) );
+}
+
 #endif  // __ANDROID_USB_MIDI__
 
 // Optional backend features use non-virtual dispatch to preserve the existing
@@ -6570,6 +6583,9 @@ RtMidiHotplug *RtMidi :: createHotplug( HotplugCallback callback, void *userData
 #if defined(__AMIDI__)
   if ( result == 0 ) result = androidHotplugStart( hotplug );
 #endif
+#if defined(__ANDROID_USB_MIDI__)
+  if ( result == 0 ) result = androidUsbHotplugStart( hotplug );
+#endif
   if ( result != 0 ) {
     destroyHotplug( hotplug );
     return 0;
@@ -6594,6 +6610,9 @@ void RtMidi :: destroyHotplug( RtMidiHotplug *hotplug )
 #endif
 #if defined(__AMIDI__)
   if ( hotplug->apiData[ANDROID_AMIDI] ) androidHotplugStop( hotplug->apiData[ANDROID_AMIDI] );
+#endif
+#if defined(__ANDROID_USB_MIDI__)
+  if ( hotplug->apiData[ANDROID_USB] ) androidUsbHotplugStop( hotplug->apiData[ANDROID_USB] );
 #endif
   delete hotplug;
 }

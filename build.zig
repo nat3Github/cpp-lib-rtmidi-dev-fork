@@ -140,6 +140,7 @@ pub fn build(b: *std.Build) !void {
                     .winmm => {
                         try flags.append(b.allocator, "-D__WINDOWS_MM__");
                         lib_mod.linkSystemLibrary("winmm", .{});
+                        lib_mod.linkSystemLibrary("cfgmgr32", .{});
                         lib_mod.linkSystemLibrary("ole32", .{});
                     },
                     .dummy => try flags.append(b.allocator, "-D__RTMIDI_DUMMY__"),

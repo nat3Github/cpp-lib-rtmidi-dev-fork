@@ -66,6 +66,11 @@ pub const c = struct {
     pub extern fn rtmidi_out_get_current_api(device: RtMidiPtr) enum_RtMidiApi;
     pub extern fn rtmidi_out_send_message(device: RtMidiOutPtr, message: [*c]const u8, length: c_int) c_int;
     pub extern fn rtmidi_set_error_callback(device: RtMidiPtr, callback: RtMidiErrorCCallback, userData: ?*anyopaque) void;
+
+    pub const RtMidiHotplug = opaque {};
+    pub const RtMidiHotplugCallback = *const fn (userData: ?*anyopaque) callconv(.c) void;
+    pub extern fn rtmidi_hotplug_create(callback: RtMidiHotplugCallback, userData: ?*anyopaque) ?*RtMidiHotplug;
+    pub extern fn rtmidi_hotplug_destroy(hotplug: *RtMidiHotplug) void;
 };
 
 pub const MidiApi = enum(c.enum_RtMidiApi) {
@@ -155,6 +160,18 @@ pub const android = struct {
     pub fn setJavaContext(vm: *anyopaque, context: ?*anyopaque) void {
         if (comptime !builtin.abi.isAndroid()) return;
         rtmidi_android_usb_set_java_context(vm, context);
+    }
+};
+
+pub const Hotplug = struct {
+    ptr: *c.RtMidiHotplug,
+
+    pub fn init(callback: c.RtMidiHotplugCallback, user_data: ?*anyopaque) !Hotplug {
+        return .{ .ptr = c.rtmidi_hotplug_create(callback, user_data) orelse return error.RtMidiError };
+    }
+
+    pub fn deinit(self: Hotplug) void {
+        c.rtmidi_hotplug_destroy(self.ptr);
     }
 };
 
@@ -337,4 +354,11 @@ test "get current api" {
     const api = midi_out.getCurrentApi();
     std.debug.print("MidiOut current API: {}\n", .{api});
     assert(api != .unspecified);
+}
+
+test "hotplug create" {
+    const h = try Hotplug.init(struct {
+        fn cb(_: ?*anyopaque) callconv(.c) void {}
+    }.cb, null);
+    h.deinit();
 }

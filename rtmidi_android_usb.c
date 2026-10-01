@@ -637,3 +637,143 @@ int rtmidi_android_usb_send(RtMidiAndroidUsbPort *port, const unsigned char *mes
   memcpy(packets + 1, message, size > 3 ? 3 : size);
   return write_packets(d, fd, packets, 4);
 }
+
+struct RtMidiAndroidUsbHotplug {
+  struct RtMidiAndroidUsbHotplug *next;
+  RtMidiAndroidUsbHotplugCallback cb;
+  void *user;
+  jobject receiver;
+};
+
+static RtMidiAndroidUsbHotplug *g_hotplugs;
+static pthread_mutex_t g_hotplug_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static void JNICALL hotplug_changed(JNIEnv *env, jclass cls, jlong id)
+{
+  (void)env;
+  (void)cls;
+  pthread_mutex_lock(&g_hotplug_lock);
+  for (RtMidiAndroidUsbHotplug *h = g_hotplugs; h; h = h->next)
+    if (h == (RtMidiAndroidUsbHotplug *)(intptr_t)id) h->cb(h->user);
+  pthread_mutex_unlock(&g_hotplug_lock);
+}
+
+static jclass app_class(JNIEnv *env, jobject ctx, const char *name)
+{
+  jmethodID get_loader = method(env, ctx, "getClassLoader", "()Ljava/lang/ClassLoader;");
+  jobject loader = get_loader ? (*env)->CallObjectMethod(env, ctx, get_loader) : NULL;
+  if (failed(env) || !loader) return NULL;
+  jmethodID load = method(env, loader, "loadClass", "(Ljava/lang/String;)Ljava/lang/Class;");
+  jstring str = (*env)->NewStringUTF(env, name);
+  jclass cls = load ? (jclass)(*env)->CallObjectMethod(env, loader, load, str) : NULL;
+  (*env)->DeleteLocalRef(env, str);
+  (*env)->DeleteLocalRef(env, loader);
+  if (failed(env)) return NULL;
+  return cls;
+}
+
+static jobject intent_filter(JNIEnv *env)
+{
+  static const char *actions[] = {
+    "android.hardware.usb.action.USB_DEVICE_ATTACHED",
+    "android.hardware.usb.action.USB_DEVICE_DETACHED",
+    "com.rtmidi.USB_PERMISSION",
+  };
+  jclass cls = (*env)->FindClass(env, "android/content/IntentFilter");
+  if (failed(env) || !cls) return NULL;
+  jmethodID ctor = (*env)->GetMethodID(env, cls, "<init>", "()V");
+  jmethodID add = (*env)->GetMethodID(env, cls, "addAction", "(Ljava/lang/String;)V");
+  jobject filter = (!failed(env) && ctor && add) ? (*env)->NewObject(env, cls, ctor) : NULL;
+  (*env)->DeleteLocalRef(env, cls);
+  if (failed(env) || !filter) return NULL;
+  for (size_t i = 0; i < sizeof(actions) / sizeof(actions[0]); i++) {
+    jstring action = (*env)->NewStringUTF(env, actions[i]);
+    (*env)->CallVoidMethod(env, filter, add, action);
+    (*env)->DeleteLocalRef(env, action);
+  }
+  if (failed(env)) {
+    (*env)->DeleteLocalRef(env, filter);
+    return NULL;
+  }
+  return filter;
+}
+
+RtMidiAndroidUsbHotplug *rtmidi_android_usb_hotplug_create(RtMidiAndroidUsbHotplugCallback callback, void *userData)
+{
+  int attached;
+  JNIEnv *env = attach(&attached);
+  if (!env || !callback) return NULL;
+  RtMidiAndroidUsbHotplug *h = NULL;
+  jobject receiver = NULL;
+  jobject filter = NULL;
+  jobject ctx = context(env);
+  jclass cls = ctx ? app_class(env, ctx, "com.yellowlab.rtmidi.UsbHotplugReceiver") : NULL;
+  if (!cls) goto done;
+  JNINativeMethod native = { "devicesChanged", "(J)V", (void *)hotplug_changed };
+  if ((*env)->RegisterNatives(env, cls, &native, 1) != JNI_OK) {
+    failed(env);
+    goto done;
+  }
+  h = (RtMidiAndroidUsbHotplug *)calloc(1, sizeof(*h));
+  if (!h) goto done;
+  h->cb = callback;
+  h->user = userData;
+  jmethodID ctor = (*env)->GetMethodID(env, cls, "<init>", "(J)V");
+  receiver = (!failed(env) && ctor) ? (*env)->NewObject(env, cls, ctor, (jlong)(intptr_t)h) : NULL;
+  filter = intent_filter(env);
+  if (failed(env) || !receiver || !filter) goto fail;
+  int sdk = sdk_level();
+  jobject sticky;
+  if (sdk >= 26) {
+    jmethodID reg = method(env, ctx, "registerReceiver",
+        "(Landroid/content/BroadcastReceiver;Landroid/content/IntentFilter;I)Landroid/content/Intent;");
+    if (!reg) goto fail;
+    jint not_exported = sdk >= 33 ? 4 : 0;
+    sticky = (*env)->CallObjectMethod(env, ctx, reg, receiver, filter, not_exported);
+  } else {
+    jmethodID reg = method(env, ctx, "registerReceiver",
+        "(Landroid/content/BroadcastReceiver;Landroid/content/IntentFilter;)Landroid/content/Intent;");
+    if (!reg) goto fail;
+    sticky = (*env)->CallObjectMethod(env, ctx, reg, receiver, filter);
+  }
+  if (failed(env)) goto fail;
+  if (sticky) (*env)->DeleteLocalRef(env, sticky);
+  h->receiver = (*env)->NewGlobalRef(env, receiver);
+  pthread_mutex_lock(&g_hotplug_lock);
+  h->next = g_hotplugs;
+  g_hotplugs = h;
+  pthread_mutex_unlock(&g_hotplug_lock);
+  goto done;
+fail:
+  free(h);
+  h = NULL;
+done:
+  if (filter) (*env)->DeleteLocalRef(env, filter);
+  if (receiver) (*env)->DeleteLocalRef(env, receiver);
+  if (cls) (*env)->DeleteLocalRef(env, cls);
+  if (ctx) (*env)->DeleteLocalRef(env, ctx);
+  detach(attached);
+  return h;
+}
+
+void rtmidi_android_usb_hotplug_destroy(RtMidiAndroidUsbHotplug *hotplug)
+{
+  if (!hotplug) return;
+  pthread_mutex_lock(&g_hotplug_lock);
+  RtMidiAndroidUsbHotplug **link = &g_hotplugs;
+  while (*link && *link != hotplug) link = &(*link)->next;
+  if (*link) *link = hotplug->next;
+  pthread_mutex_unlock(&g_hotplug_lock);
+  int attached;
+  JNIEnv *env = attach(&attached);
+  if (env) {
+    jobject ctx = context(env);
+    jmethodID unreg = ctx ? method(env, ctx, "unregisterReceiver", "(Landroid/content/BroadcastReceiver;)V") : NULL;
+    if (unreg) (*env)->CallVoidMethod(env, ctx, unreg, hotplug->receiver);
+    failed(env);
+    if (ctx) (*env)->DeleteLocalRef(env, ctx);
+    (*env)->DeleteGlobalRef(env, hotplug->receiver);
+    detach(attached);
+  }
+  free(hotplug);
+}
