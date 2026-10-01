@@ -706,9 +706,8 @@ RTMIDI_DLL_PUBLIC RtMidiIn :: RtMidiIn( RtMidi::Api api, const std::string &clie
   getCompiledApi( apis );
   for ( unsigned int i=0; i<apis.size(); i++ ) {
     openMidiApi( apis[i], clientName, queueSizeLimit );
-    if ( rtapi_ && rtapi_->getPortCount() ) return;
+    if ( rtapi_ && rtapi_->getPortCount() ) break;
   }
-  if ( !apis.empty() ) openMidiApi( apis[0], clientName, queueSizeLimit );
 
   if ( rtapi_ ) return;
 
@@ -790,9 +789,8 @@ RTMIDI_DLL_PUBLIC RtMidiOut :: RtMidiOut( RtMidi::Api api, const std::string &cl
   getCompiledApi( apis );
   for ( unsigned int i=0; i<apis.size(); i++ ) {
     openMidiApi( apis[i], clientName );
-    if ( rtapi_ && rtapi_->getPortCount() ) return;
+    if ( rtapi_ && rtapi_->getPortCount() ) break;
   }
-  if ( !apis.empty() ) openMidiApi( apis[0], clientName );
 
   if ( rtapi_ ) return;
 
